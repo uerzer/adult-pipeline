@@ -1,742 +1,483 @@
 """
-Reddit Posting Module for Adult Creator Traffic Pipeline
-Automated SFW teaser posting with account warming and human-like behavior
+Reddit Module - Browser Automation via nodriver (undetected Chrome)
+Posts SFW teasers to niche subreddits with human-like warming behavior.
+No API credentials needed — just a Reddit account (username + password).
 """
 
-import praw
-import requests
+import asyncio
+import nodriver as uc
 import os
 import time
 import random
+import json
 import sqlite3
 from datetime import datetime, timedelta
-from typing import List, Dict, Optional, Tuple
-import json
 from pathlib import Path
+from typing import Optional, List, Dict
 
-# Requirements: praw, requests, pillow
+
+# ─── Config ────────────────────────────────────────────────────────────────────
+
+REDDIT_USERNAME = os.getenv("REDDIT_USERNAME")
+REDDIT_PASSWORD = os.getenv("REDDIT_PASSWORD")
+PROXY_URL       = os.getenv("PROXY_URL", "")          # optional: socks5://host:port
+OUTPUT_DIR      = Path("output")
+DB_PATH         = OUTPUT_DIR / "reddit.db"
+
+# Target subreddits with metadata
+SUBREDDITS: List[Dict] = [
+    {"name": "OnlyFansPromotions",  "karma_min": 0,   "image": True,  "nsfw": False},
+    {"name": "Feetishh",            "karma_min": 100,  "image": True,  "nsfw": False},
+    {"name": "GoneWildPlus",        "karma_min": 50,   "image": True,  "nsfw": True},
+    {"name": "RealGirls",           "karma_min": 200,  "image": True,  "nsfw": True},
+    {"name": "NSFWposts",           "karma_min": 0,    "image": True,  "nsfw": True},
+    {"name": "amihot",              "karma_min": 0,    "image": True,  "nsfw": False},
+    {"name": "PetiteGoneWild",      "karma_min": 50,   "image": True,  "nsfw": True},
+    {"name": "AmateurPhotography",  "karma_min": 0,    "image": True,  "nsfw": False},
+    {"name": "SFWNextDoor",         "karma_min": 0,    "image": True,  "nsfw": False},
+    {"name": "onlyfansadvice",      "karma_min": 0,    "image": False, "nsfw": False},
+]
+
+# Human-like timing ranges (seconds)
+DELAYS = {
+    "between_actions":  (2.5, 6.0),
+    "between_posts":    (180, 600),     # 3-10 min between posts
+    "scroll_pause":     (0.8, 2.5),
+    "typing_char":      (0.05, 0.18),
+    "post_read":        (8, 30),
+    "session_start":    (5, 15),
+}
+
+# Warming schedule — days since account creation
+WARMING_PHASES = {
+    "lurk":    (0, 7),     # days 0-7: only browse, upvote
+    "comment": (7, 14),    # days 7-14: browse + comment on others
+    "post":    (14, 9999), # day 14+: full posting
+}
 
 
-class RedditPoster:
-    """Handles Reddit authentication and posting via PRAW"""
-    
-    def __init__(self):
-        self.client_id = os.getenv('REDDIT_CLIENT_ID')
-        self.client_secret = os.getenv('REDDIT_CLIENT_SECRET')
-        self.username = os.getenv('REDDIT_USERNAME')
-        self.password = os.getenv('REDDIT_PASSWORD')
-        self.user_agent = f"python:adult-creator-pipeline:v1.0 (by /u/{self.username})"
-        
-        if not all([self.client_id, self.client_secret, self.username, self.password]):
-            print("[REDDIT] ⚠️  Missing credentials! Set these env vars:")
-            print("[REDDIT]   REDDIT_CLIENT_ID")
-            print("[REDDIT]   REDDIT_CLIENT_SECRET")
-            print("[REDDIT]   REDDIT_USERNAME")
-            print("[REDDIT]   REDDIT_PASSWORD")
-            print("[REDDIT] Get credentials from: https://www.reddit.com/prefs/apps")
-            raise ValueError("Missing Reddit credentials")
-        
-        self.reddit = praw.Reddit(
-            client_id=self.client_id,
-            client_secret=self.client_secret,
-            username=self.username,
-            password=self.password,
-            user_agent=self.user_agent
+# ─── Database ──────────────────────────────────────────────────────────────────
+
+def init_db():
+    OUTPUT_DIR.mkdir(exist_ok=True)
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS posts (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            subreddit   TEXT,
+            title       TEXT,
+            image_path  TEXT,
+            post_url    TEXT,
+            upvotes     INTEGER DEFAULT 0,
+            posted_at   TEXT,
+            status      TEXT DEFAULT 'pending'
         )
-        
-        print(f"[REDDIT] ✓ Authenticated as u/{self.username}")
-    
-    def get_account_age_days(self) -> int:
-        """Get account age in days"""
-        created_utc = self.reddit.user.me().created_utc
-        age = datetime.now() - datetime.fromtimestamp(created_utc)
-        return age.days
-    
-    def get_karma(self) -> Tuple[int, int]:
-        """Get link and comment karma"""
-        user = self.reddit.user.me()
-        return user.link_karma, user.comment_karma
-    
-    def get_subreddit_flair(self, subreddit_name: str) -> Optional[List[Dict]]:
-        """Get available flairs for a subreddit"""
-        try:
-            subreddit = self.reddit.subreddit(subreddit_name)
-            flairs = list(subreddit.flair.link_templates)
-            return flairs
-        except Exception as e:
-            print(f"[REDDIT] Could not get flairs for r/{subreddit_name}: {e}")
-            return None
-    
-    def post_image(
-        self,
-        subreddit_name: str,
-        title: str,
-        image_path: str,
-        flair_id: Optional[str] = None
-    ) -> Optional[str]:
-        """
-        Post an image to a subreddit
-        Returns: post URL if successful, None if failed
-        """
-        try:
-            subreddit = self.reddit.subreddit(subreddit_name)
-            
-            print(f"[REDDIT] Posting to r/{subreddit_name}: '{title[:50]}...'")
-            
-            submission = subreddit.submit_image(
-                title=title,
-                image_path=image_path,
-                flair_id=flair_id
-            )
-            
-            post_url = f"https://reddit.com{submission.permalink}"
-            print(f"[REDDIT] ✓ Posted successfully: {post_url}")
-            
-            return post_url
-            
-        except Exception as e:
-            print(f"[REDDIT] ✗ Failed to post to r/{subreddit_name}: {e}")
-            return None
-    
-    def comment_on_post(self, post_url: str, comment_text: str) -> bool:
-        """Comment on a Reddit post"""
-        try:
-            submission = self.reddit.submission(url=post_url)
-            submission.reply(comment_text)
-            print(f"[REDDIT] ✓ Commented on post")
-            return True
-        except Exception as e:
-            print(f"[REDDIT] ✗ Failed to comment: {e}")
-            return False
-    
-    def upvote_random_posts(self, subreddit_name: str, count: int = 5):
-        """Upvote random posts in a subreddit (for account warming)"""
-        try:
-            subreddit = self.reddit.subreddit(subreddit_name)
-            posts = list(subreddit.hot(limit=50))
-            random.shuffle(posts)
-            
-            upvoted = 0
-            for post in posts[:count]:
-                if not post.stickied:  # Skip pinned posts
-                    post.upvote()
-                    upvoted += 1
-                    time.sleep(random.uniform(2, 5))
-            
-            print(f"[REDDIT] ✓ Upvoted {upvoted} posts in r/{subreddit_name}")
-            
-        except Exception as e:
-            print(f"[REDDIT] ✗ Failed to upvote in r/{subreddit_name}: {e}")
+    """)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS account_log (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            action     TEXT,
+            target     TEXT,
+            timestamp  TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    conn.commit()
+    conn.close()
 
 
-class SubredditManager:
-    """Manages target subreddits with metadata"""
-    
-    SUBREDDITS = [
-        {
-            "name": "OnlyFansPromotions",
-            "requires_flair": False,
-            "link_allowed": False,
-            "image_allowed": True,
-            "karma_threshold": 0,
-            "description": "OF promotion hub"
-        },
-        {
-            "name": "Feetishh",
-            "requires_flair": False,
-            "link_allowed": False,
-            "image_allowed": True,
-            "karma_threshold": 100,
-            "description": "Feet content niche"
-        },
-        {
-            "name": "AmateurPhotography",
-            "requires_flair": True,
-            "link_allowed": False,
-            "image_allowed": True,
-            "karma_threshold": 50,
-            "description": "Amateur photo sharing"
-        },
-        {
-            "name": "Amateurs",
-            "requires_flair": False,
-            "link_allowed": False,
-            "image_allowed": True,
-            "karma_threshold": 0,
-            "description": "Amateur content"
-        },
-        {
-            "name": "FreePornAccounts",
-            "requires_flair": False,
-            "link_allowed": True,
-            "image_allowed": True,
-            "karma_threshold": 0,
-            "description": "Free account promo"
-        },
-        {
-            "name": "onlyfansgirls101",
-            "requires_flair": False,
-            "link_allowed": False,
-            "image_allowed": True,
-            "karma_threshold": 0,
-            "description": "OF girls promo"
-        },
-        {
-            "name": "NSFW411",
-            "requires_flair": False,
-            "link_allowed": True,
-            "image_allowed": False,
-            "karma_threshold": 200,
-            "description": "NSFW directory"
-        },
-        {
-            "name": "OnlyFans101",
-            "requires_flair": False,
-            "link_allowed": False,
-            "image_allowed": True,
-            "karma_threshold": 0,
-            "description": "OF promo main"
-        },
-        {
-            "name": "RealGirls",
-            "requires_flair": False,
-            "link_allowed": False,
-            "image_allowed": True,
-            "karma_threshold": 500,
-            "description": "High karma real girls"
-        },
-        {
-            "name": "Verification",
-            "requires_flair": False,
-            "link_allowed": False,
-            "image_allowed": True,
-            "karma_threshold": 0,
-            "description": "Verification posts"
-        },
-        {
-            "name": "gonewild",
-            "requires_flair": True,
-            "link_allowed": False,
-            "image_allowed": True,
-            "karma_threshold": 1000,
-            "description": "High karma NSFW"
-        },
-        {
-            "name": "petitegonewild",
-            "requires_flair": True,
-            "link_allowed": False,
-            "image_allowed": True,
-            "karma_threshold": 500,
-            "description": "Petite niche"
-        },
-        {
-            "name": "AssAndTittiesOF",
-            "requires_flair": False,
-            "link_allowed": False,
-            "image_allowed": True,
-            "karma_threshold": 0,
-            "description": "OF body focus"
-        },
-        {
-            "name": "SluttyConfessions",
-            "requires_flair": False,
-            "link_allowed": False,
-            "image_allowed": False,
-            "karma_threshold": 100,
-            "description": "Text confession promo"
-        },
-        {
-            "name": "OFpromo",
-            "requires_flair": False,
-            "link_allowed": False,
-            "image_allowed": True,
-            "karma_threshold": 0,
-            "description": "OF promo alt"
-        },
-        {
-            "name": "CurvyWomenOfColor",
-            "requires_flair": False,
-            "link_allowed": False,
-            "image_allowed": True,
-            "karma_threshold": 50,
-            "description": "Curvy WOC niche"
-        },
-        {
-            "name": "TributeMe",
-            "requires_flair": False,
-            "link_allowed": False,
-            "image_allowed": True,
-            "karma_threshold": 200,
-            "description": "Tribute requests"
-        },
-        {
-            "name": "ExposedAmateurs",
-            "requires_flair": False,
-            "link_allowed": False,
-            "image_allowed": True,
-            "karma_threshold": 0,
-            "description": "Amateur exposure"
-        },
-        {
-            "name": "ChubbyGirls",
-            "requires_flair": False,
-            "link_allowed": False,
-            "image_allowed": True,
-            "karma_threshold": 50,
-            "description": "Body positive niche"
-        },
-        {
-            "name": "Thickness",
-            "requires_flair": False,
-            "link_allowed": False,
-            "image_allowed": True,
-            "karma_threshold": 100,
-            "description": "Thick body type"
-        }
+def log_action(action: str, target: str):
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("INSERT INTO account_log (action, target) VALUES (?, ?)", (action, target))
+    conn.commit()
+    conn.close()
+
+
+def log_post(subreddit: str, title: str, image_path: str, post_url: str):
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute(
+        "INSERT INTO posts (subreddit, title, image_path, post_url, posted_at, status) VALUES (?, ?, ?, ?, ?, ?)",
+        (subreddit, title, image_path, post_url, datetime.now().isoformat(), "posted")
+    )
+    conn.commit()
+    conn.close()
+
+
+def already_posted_today(subreddit: str) -> bool:
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    today = datetime.now().strftime("%Y-%m-%d")
+    c.execute(
+        "SELECT COUNT(*) FROM posts WHERE subreddit=? AND posted_at LIKE ? AND status='posted'",
+        (subreddit, f"{today}%")
+    )
+    count = c.fetchone()[0]
+    conn.close()
+    return count > 0
+
+
+# ─── Browser helpers ──────────────────────────────────────────────────────────
+
+async def human_delay(category: str = "between_actions"):
+    lo, hi = DELAYS.get(category, (2, 5))
+    await asyncio.sleep(random.uniform(lo, hi))
+
+
+async def human_scroll(page, iterations: int = None):
+    """Scroll the page naturally with random pauses."""
+    iters = iterations or random.randint(3, 8)
+    for _ in range(iters):
+        distance = random.randint(200, 700)
+        direction = "+" if random.random() > 0.15 else "-"
+        await page.evaluate(f"window.scrollBy(0, {direction}{distance})")
+        await human_delay("scroll_pause")
+
+
+async def human_type(element, text: str):
+    """Type text character by character with human-like timing."""
+    for char in text:
+        await element.send_keys(char)
+        if char == " " and random.random() < 0.3:
+            await asyncio.sleep(random.uniform(0.3, 0.9))
+        else:
+            await asyncio.sleep(random.uniform(*DELAYS["typing_char"]))
+
+
+async def wait_for_selector(page, selector: str, timeout: int = 15) -> Optional[object]:
+    """Wait for an element to appear, return it or None."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            el = await page.find(selector, timeout=2)
+            if el:
+                return el
+        except Exception:
+            pass
+        await asyncio.sleep(0.5)
+    return None
+
+
+# ─── Browser factory ──────────────────────────────────────────────────────────
+
+async def launch_browser() -> uc.Browser:
+    """Launch nodriver browser with anti-detection settings."""
+    args = [
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--disable-blink-features=AutomationControlled",
+        "--disable-features=IsolateOrigins,site-per-process",
+        "--lang=en-US,en;q=0.9",
+        f"--window-size={random.randint(1200,1440)},{random.randint(800,900)}",
     ]
-    
-    def get_eligible_subreddits(self, karma: int, account_age_days: int) -> List[Dict]:
-        """Get subreddits user is eligible to post in"""
-        eligible = []
-        
-        for sub in self.SUBREDDITS:
-            if karma >= sub["karma_threshold"]:
-                eligible.append(sub)
-        
-        return eligible
-    
-    def get_low_karma_subs(self) -> List[Dict]:
-        """Get subreddits with karma threshold <= 100"""
-        return [s for s in self.SUBREDDITS if s["karma_threshold"] <= 100]
-    
-    def get_all_subreddits(self) -> List[Dict]:
-        """Get all subreddits"""
-        return self.SUBREDDITS
+
+    if PROXY_URL:
+        args.append(f"--proxy-server={PROXY_URL}")
+
+    browser = await uc.start(
+        browser_args=args,
+        headless=False,   # set True on VPS with Xvfb
+        lang="en-US",
+    )
+    return browser
 
 
-class WarmingSchedule:
-    """Manages account warming progression and post timing"""
-    
-    def __init__(self, db_path: str = "output/reddit_state.db"):
-        self.db_path = db_path
-        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-        self._init_db()
-    
-    def _init_db(self):
-        """Initialize SQLite database for state tracking"""
-        conn = sqlite3.connect(self.db_path)
-        c = conn.cursor()
-        
-        c.execute('''
-            CREATE TABLE IF NOT EXISTS account_state (
-                id INTEGER PRIMARY KEY,
-                username TEXT UNIQUE,
-                account_age_days INTEGER,
-                link_karma INTEGER,
-                comment_karma INTEGER,
-                last_post_date TEXT,
-                total_posts INTEGER DEFAULT 0,
-                warming_phase TEXT,
-                updated_at TEXT
-            )
-        ''')
-        
-        c.execute('''
-            CREATE TABLE IF NOT EXISTS post_history (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                username TEXT,
-                subreddit TEXT,
-                post_url TEXT,
-                posted_at TEXT,
-                karma_at_post INTEGER
-            )
-        ''')
-        
-        conn.commit()
-        conn.close()
-    
-    def update_account_state(
-        self,
-        username: str,
-        account_age_days: int,
-        link_karma: int,
-        comment_karma: int
-    ):
-        """Update account state in database"""
-        conn = sqlite3.connect(self.db_path)
-        c = conn.cursor()
-        
-        phase = self._determine_phase(account_age_days, link_karma + comment_karma)
-        
-        c.execute('''
-            INSERT OR REPLACE INTO account_state 
-            (username, account_age_days, link_karma, comment_karma, warming_phase, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?)
-        ''', (username, account_age_days, link_karma, comment_karma, phase, datetime.now().isoformat()))
-        
-        conn.commit()
-        conn.close()
-        
-        print(f"[REDDIT] Account state: {account_age_days} days old, {link_karma + comment_karma} karma, Phase: {phase}")
-    
-    def _determine_phase(self, age_days: int, total_karma: int) -> str:
-        """Determine warming phase based on account age and karma"""
-        if age_days < 14:
-            return "WARMING_WEEK_1_2"
-        elif age_days < 28:
-            return "WARMING_WEEK_3_4"
-        else:
-            return "FULL_ROTATION"
-    
-    def get_warming_phase(self, username: str) -> str:
-        """Get current warming phase for user"""
-        conn = sqlite3.connect(self.db_path)
-        c = conn.cursor()
-        
-        c.execute('SELECT warming_phase FROM account_state WHERE username = ?', (username,))
-        row = c.fetchone()
-        conn.close()
-        
-        return row[0] if row else "WARMING_WEEK_1_2"
-    
-    def can_post_today(self, username: str) -> bool:
-        """Check if account can post today based on warming schedule"""
-        conn = sqlite3.connect(self.db_path)
-        c = conn.cursor()
-        
-        c.execute('SELECT last_post_date FROM account_state WHERE username = ?', (username,))
-        row = c.fetchone()
-        conn.close()
-        
-        if not row or not row[0]:
-            return True
-        
-        last_post = datetime.fromisoformat(row[0])
-        days_since = (datetime.now() - last_post).days
-        
-        # Don't post more than once per day
-        return days_since >= 1
-    
-    def record_post(self, username: str, subreddit: str, post_url: str, karma: int):
-        """Record a post in history"""
-        conn = sqlite3.connect(self.db_path)
-        c = conn.cursor()
-        
-        c.execute('''
-            INSERT INTO post_history (username, subreddit, post_url, posted_at, karma_at_post)
-            VALUES (?, ?, ?, ?, ?)
-        ''', (username, subreddit, post_url, datetime.now().isoformat(), karma))
-        
-        # Update last post date
-        c.execute('''
-            UPDATE account_state 
-            SET last_post_date = ?, total_posts = total_posts + 1
-            WHERE username = ?
-        ''', (datetime.now().isoformat(), username))
-        
-        conn.commit()
-        conn.close()
-    
-    def get_optimal_post_time(self) -> datetime:
-        """
-        Get optimal post time (peak Reddit hours: 9am-12pm or 6pm-10pm EST)
-        Returns a datetime with random jitter
-        """
-        now = datetime.now()
-        
-        # Choose morning or evening slot randomly
-        if random.random() < 0.5:
-            # Morning slot: 9am-12pm EST
-            hour = random.randint(9, 11)
-        else:
-            # Evening slot: 6pm-10pm EST
-            hour = random.randint(18, 21)
-        
-        minute = random.randint(0, 59)
-        
-        # Add jitter: +/- 30 minutes
-        jitter_minutes = random.randint(-30, 30)
-        
-        target_time = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
-        target_time += timedelta(minutes=jitter_minutes)
-        
-        return target_time
+# ─── Reddit actions ───────────────────────────────────────────────────────────
+
+async def login(browser: uc.Browser) -> uc.Tab:
+    """Log into Reddit. Returns the active tab."""
+    print("[REDDIT] Logging in...")
+    tab = await browser.get("https://www.reddit.com/login")
+    await human_delay("session_start")
+
+    user_field = await wait_for_selector(tab, "input#loginUsername")
+    if not user_field:
+        raise RuntimeError("Could not find username field on login page")
+    await human_type(user_field, REDDIT_USERNAME)
+    await human_delay()
+
+    pass_field = await wait_for_selector(tab, "input#loginPassword")
+    await human_type(pass_field, REDDIT_PASSWORD)
+    await human_delay()
+
+    submit_btn = await wait_for_selector(tab, "button[type='submit']")
+    await submit_btn.click()
+    await asyncio.sleep(4)
+
+    if "login" in tab.url:
+        raise RuntimeError("[REDDIT] Login failed — check credentials")
+
+    print(f"[REDDIT] Logged in as u/{REDDIT_USERNAME}")
+    log_action("login", REDDIT_USERNAME)
+    return tab
 
 
-class HumanBehavior:
-    """Simulates human-like behavior to avoid bot detection"""
-    
-    @staticmethod
-    def random_delay(min_seconds: int = 30, max_seconds: int = 120):
-        """Sleep with gaussian distribution (more natural than uniform)"""
-        mean = (min_seconds + max_seconds) / 2
-        std_dev = (max_seconds - min_seconds) / 6
-        
-        delay = random.gauss(mean, std_dev)
-        delay = max(min_seconds, min(max_seconds, delay))  # Clamp to range
-        
-        print(f"[REDDIT] Waiting {delay:.1f}s (human timing)...")
-        time.sleep(delay)
-    
-    @staticmethod
-    def typing_pause():
-        """Simulate reading/thinking time before posting"""
-        pause = random.gauss(15, 5)  # ~15 seconds average
-        pause = max(5, min(30, pause))
-        print(f"[REDDIT] Reading time: {pause:.1f}s...")
-        time.sleep(pause)
-    
-    @staticmethod
-    def should_skip_today() -> bool:
-        """Randomly skip posting 1 day per week (14% chance)"""
-        skip = random.random() < 0.14
-        if skip:
-            print("[REDDIT] 🎲 Randomly skipping today (human behavior)")
-        return skip
+async def browse_subreddit(tab: uc.Tab, subreddit: str, read_posts: int = None):
+    """Browse a subreddit naturally — scroll, read posts, maybe upvote."""
+    n = read_posts or random.randint(3, 8)
+    print(f"[REDDIT] Browsing r/{subreddit} ({n} posts)...")
 
+    await tab.get(f"https://www.reddit.com/r/{subreddit}/")
+    await human_delay("session_start")
+    await human_scroll(tab, random.randint(2, 5))
 
-class ContentQueue:
-    """Interface to content queue from content_brain.py"""
-    
-    def __init__(self, db_path: str = "output/queue.db"):
-        self.db_path = db_path
-    
-    def get_pending_reddit_content(self) -> List[Dict]:
-        """Get pending Reddit posts from queue"""
-        if not os.path.exists(self.db_path):
-            print(f"[REDDIT] Queue database not found: {self.db_path}")
-            return []
-        
-        conn = sqlite3.connect(self.db_path)
-        c = conn.cursor()
-        
+    for _ in range(n):
         try:
-            c.execute('''
-                SELECT id, platform, content_type, caption, image_path, created_at
-                FROM content_queue
-                WHERE platform = 'reddit' AND status = 'pending'
-                ORDER BY created_at ASC
-                LIMIT 5
-            ''')
-            
-            rows = c.fetchall()
-            
-            content = []
-            for row in rows:
-                content.append({
-                    'id': row[0],
-                    'platform': row[1],
-                    'content_type': row[2],
-                    'caption': row[3],
-                    'image_path': row[4],
-                    'created_at': row[5]
-                })
-            
-            return content
-            
-        except sqlite3.OperationalError as e:
-            print(f"[REDDIT] Queue database error: {e}")
-            return []
-        finally:
-            conn.close()
-    
-    def mark_posted(self, content_id: int, post_url: str):
-        """Mark content as posted"""
-        conn = sqlite3.connect(self.db_path)
-        c = conn.cursor()
-        
-        c.execute('''
-            UPDATE content_queue
-            SET status = 'posted', posted_at = ?, post_url = ?
-            WHERE id = ?
-        ''', (datetime.now().isoformat(), post_url, content_id))
-        
-        conn.commit()
-        conn.close()
-    
-    def mark_failed(self, content_id: int, error: str):
-        """Mark content as failed"""
-        conn = sqlite3.connect(self.db_path)
-        c = conn.cursor()
-        
-        c.execute('''
-            UPDATE content_queue
-            SET status = 'failed', error = ?
-            WHERE id = ?
-        ''', (error, content_id))
-        
-        conn.commit()
-        conn.close()
+            posts = await tab.find_all("a[data-click-id='body']")
+            if not posts:
+                break
+            post = random.choice(posts[:15])
+            await post.click()
+            await human_delay("post_read")
+            await human_scroll(tab, random.randint(2, 6))
+
+            # Randomly upvote (30% chance)
+            if random.random() < 0.3:
+                upvote_btn = await tab.find("button[aria-label='upvote']")
+                if upvote_btn:
+                    await upvote_btn.click()
+                    log_action("upvote", subreddit)
+                    await human_delay()
+
+            await tab.back()
+            await human_delay()
+        except Exception as e:
+            print(f"[REDDIT] Browse error (non-fatal): {e}")
+            break
+
+    print(f"[REDDIT] Done browsing r/{subreddit}")
 
 
-def log_activity(message: str, log_path: str = "output/reddit_log.txt"):
-    """Log activity to file"""
-    Path(log_path).parent.mkdir(parents=True, exist_ok=True)
-    
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    log_entry = f"[{timestamp}] {message}\n"
-    
-    with open(log_path, 'a', encoding='utf-8') as f:
-        f.write(log_entry)
+async def leave_comment(tab: uc.Tab, subreddit: str, comment_text: str):
+    """Find a post and leave a comment — used during warming phase."""
+    print(f"[REDDIT] Commenting in r/{subreddit}...")
+    await tab.get(f"https://www.reddit.com/r/{subreddit}/new/")
+    await human_delay()
+    await human_scroll(tab, 2)
 
-
-def main():
-    """Main orchestration function"""
-    print("[REDDIT] ====================================")
-    print("[REDDIT] Reddit Posting Module Starting")
-    print("[REDDIT] ====================================")
-    
     try:
-        # Initialize components
-        poster = RedditPoster()
-        sub_manager = SubredditManager()
-        warming = WarmingSchedule()
-        behavior = HumanBehavior()
-        queue = ContentQueue()
-        
-        # Get account info
-        account_age = poster.get_account_age_days()
-        link_karma, comment_karma = poster.get_karma()
-        total_karma = link_karma + comment_karma
-        
-        print(f"[REDDIT] Account: u/{poster.username}")
-        print(f"[REDDIT] Age: {account_age} days")
-        print(f"[REDDIT] Karma: {total_karma} (link: {link_karma}, comment: {comment_karma})")
-        
-        # Update account state
-        warming.update_account_state(poster.username, account_age, link_karma, comment_karma)
-        
-        # Check if we should post today
-        if not warming.can_post_today(poster.username):
-            print("[REDDIT] Already posted today. Skipping.")
-            log_activity("Already posted today - skipping")
+        posts = await tab.find_all("a[data-click-id='body']")
+        if not posts:
             return
-        
-        # Random skip for human behavior
-        if behavior.should_skip_today():
-            log_activity("Randomly skipped today (human behavior)")
-            return
-        
-        # Get warming phase
-        phase = warming.get_warming_phase(poster.username)
-        print(f"[REDDIT] Current phase: {phase}")
-        
-        # Phase-specific behavior
-        if phase == "WARMING_WEEK_1_2":
-            print("[REDDIT] WARMING PHASE 1-2: Upvoting and commenting only")
-            log_activity("Warming phase 1-2: upvoting posts")
-            
-            # Upvote in a few subreddits
-            low_karma_subs = sub_manager.get_low_karma_subs()
-            random.shuffle(low_karma_subs)
-            
-            for sub in low_karma_subs[:3]:
-                poster.upvote_random_posts(sub['name'], count=5)
-                behavior.random_delay(60, 180)
-            
-            print("[REDDIT] ✓ Warming activity complete")
-            
-        elif phase == "WARMING_WEEK_3_4":
-            print("[REDDIT] WARMING PHASE 3-4: Posting to 1-2 low-karma subs")
-            log_activity("Warming phase 3-4: limited posting")
-            
-            # Get eligible low-karma subs
-            low_karma_subs = sub_manager.get_low_karma_subs()
-            eligible = [s for s in low_karma_subs if total_karma >= s['karma_threshold']]
-            
-            if not eligible:
-                print("[REDDIT] No eligible subreddits yet. Need more karma.")
-                return
-            
-            # Get content from queue
-            pending_content = queue.get_pending_reddit_content()
-            
-            if not pending_content:
-                print("[REDDIT] No pending content in queue")
-                return
-            
-            content = pending_content[0]  # Take first item
-            
-            # Post to 1-2 subs
-            target_subs = random.sample(eligible, min(2, len(eligible)))
-            
-            for sub in target_subs:
-                behavior.typing_pause()
-                
-                post_url = poster.post_image(
-                    subreddit_name=sub['name'],
-                    title=content['caption'],
-                    image_path=content['image_path']
-                )
-                
-                if post_url:
-                    warming.record_post(poster.username, sub['name'], post_url, total_karma)
-                    queue.mark_posted(content['id'], post_url)
-                    log_activity(f"Posted to r/{sub['name']}: {post_url}")
-                else:
-                    queue.mark_failed(content['id'], f"Failed to post to r/{sub['name']}")
-                
-                behavior.random_delay(120, 300)
-        
-        else:  # FULL_ROTATION
-            print("[REDDIT] FULL ROTATION: Posting to all eligible subs")
-            log_activity("Full rotation: unrestricted posting")
-            
-            # Get all eligible subreddits
-            eligible = sub_manager.get_eligible_subreddits(total_karma, account_age)
-            
-            if not eligible:
-                print("[REDDIT] No eligible subreddits. Need more karma.")
-                return
-            
-            print(f"[REDDIT] Eligible subreddits: {len(eligible)}")
-            
-            # Get content from queue
-            pending_content = queue.get_pending_reddit_content()
-            
-            if not pending_content:
-                print("[REDDIT] No pending content in queue")
-                return
-            
-            content = pending_content[0]
-            
-            # Post to 3-5 subreddits
-            target_count = random.randint(3, 5)
-            target_subs = random.sample(eligible, min(target_count, len(eligible)))
-            
-            print(f"[REDDIT] Posting to {len(target_subs)} subreddits today")
-            
-            for sub in target_subs:
-                behavior.typing_pause()
-                
-                post_url = poster.post_image(
-                    subreddit_name=sub['name'],
-                    title=content['caption'],
-                    image_path=content['image_path']
-                )
-                
-                if post_url:
-                    warming.record_post(poster.username, sub['name'], post_url, total_karma)
-                    queue.mark_posted(content['id'], post_url)
-                    log_activity(f"Posted to r/{sub['name']}: {post_url}")
-                else:
-                    queue.mark_failed(content['id'], f"Failed to post to r/{sub['name']}")
-                
-                behavior.random_delay(120, 300)
-        
-        print("[REDDIT] ====================================")
-        print("[REDDIT] Session complete")
-        print("[REDDIT] ====================================")
-        
-    except ValueError as e:
-        print(f"[REDDIT] Configuration error: {e}")
-        log_activity(f"ERROR: {e}")
-    except Exception as e:
-        print(f"[REDDIT] Unexpected error: {e}")
-        log_activity(f"ERROR: {e}")
-        import traceback
-        traceback.print_exc()
+        post = random.choice(posts[:10])
+        await post.click()
+        await human_delay("post_read")
 
+        comment_box = await wait_for_selector(tab, "div[data-testid='comment-submission-form-richtext']")
+        if comment_box:
+            await comment_box.click()
+            await human_type(comment_box, comment_text)
+            await human_delay()
+
+            submit = await wait_for_selector(tab, "button[type='submit']")
+            if submit:
+                await submit.click()
+                await asyncio.sleep(3)
+                log_action("comment", subreddit)
+                print(f"[REDDIT] Commented in r/{subreddit}")
+    except Exception as e:
+        print(f"[REDDIT] Comment error: {e}")
+
+
+async def post_image_to_subreddit(
+    tab: uc.Tab,
+    subreddit: str,
+    title: str,
+    image_path: str,
+) -> Optional[str]:
+    """
+    Post an image to a subreddit using the browser.
+    Returns post URL or None on failure.
+    """
+    if already_posted_today(subreddit):
+        print(f"[REDDIT] Already posted to r/{subreddit} today, skipping")
+        return None
+
+    print(f"[REDDIT] Posting to r/{subreddit}...")
+    await tab.get(f"https://www.reddit.com/r/{subreddit}/submit?type=image")
+    await human_delay("session_start")
+
+    try:
+        title_field = await wait_for_selector(tab, "textarea[name='title'], input[name='title']")
+        if not title_field:
+            print(f"[REDDIT] Could not find title field in r/{subreddit}")
+            return None
+        await title_field.click()
+        await human_type(title_field, title)
+        await human_delay()
+
+        file_input = await wait_for_selector(tab, "input[type='file']")
+        if not file_input:
+            print(f"[REDDIT] Could not find file upload in r/{subreddit}")
+            return None
+        await file_input.send_file(str(Path(image_path).resolve()))
+        await asyncio.sleep(4)
+
+        await human_delay()
+
+        submit_btn = await wait_for_selector(tab, "button[type='submit']:not([disabled])")
+        if not submit_btn:
+            print(f"[REDDIT] Submit button not found or disabled in r/{subreddit}")
+            return None
+
+        await submit_btn.click()
+        await asyncio.sleep(5)
+
+        post_url = tab.url
+        if "/comments/" in post_url:
+            print(f"[REDDIT] Posted: {post_url}")
+            log_post(subreddit, title, image_path, post_url)
+            log_action("post", subreddit)
+            return post_url
+        else:
+            print(f"[REDDIT] Post may have failed — landed at: {post_url}")
+            return None
+
+    except Exception as e:
+        print(f"[REDDIT] Post error in r/{subreddit}: {e}")
+        return None
+
+
+# ─── Warming phase logic ──────────────────────────────────────────────────────
+
+def get_account_phase() -> str:
+    """Determine current warming phase based on account creation record."""
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT MIN(timestamp) FROM account_log")
+    row = c.fetchone()
+    conn.close()
+
+    if not row or not row[0]:
+        log_action("account_created", REDDIT_USERNAME)
+        return "lurk"
+
+    created = datetime.fromisoformat(row[0])
+    days_old = (datetime.now() - created).days
+
+    for phase, (start, end) in WARMING_PHASES.items():
+        if start <= days_old < end:
+            return phase
+
+    return "post"
+
+
+# ─── Main pipeline entry points ───────────────────────────────────────────────
+
+async def run_warming_session():
+    """
+    Run a warming session — browse subreddits, upvote, maybe comment.
+    Call this daily even before the account is ready to post.
+    """
+    init_db()
+    phase = get_account_phase()
+    print(f"[REDDIT] Account phase: {phase}")
+
+    browser = await launch_browser()
+    try:
+        tab = await login(browser)
+        await human_delay()
+
+        subs_to_browse = random.sample(SUBREDDITS, min(4, len(SUBREDDITS)))
+        for sub in subs_to_browse:
+            await browse_subreddit(tab, sub["name"], random.randint(3, 7))
+            await human_delay("between_posts")
+
+        if phase == "comment":
+            warming_comments = [
+                "Love this community",
+                "This made my day honestly",
+                "Incredible, keep it up!",
+                "Amazing content as always",
+                "You're too good at this lol",
+            ]
+            comment_sub = random.choice(SUBREDDITS)
+            await leave_comment(tab, comment_sub["name"], random.choice(warming_comments))
+
+        print(f"[REDDIT] Warming session complete (phase: {phase})")
+
+    finally:
+        browser.stop()
+
+
+async def run_post_session(posts: List[Dict]) -> List[str]:
+    """
+    Post a batch of SFW teasers to subreddits.
+    posts = [{"subreddit": "...", "title": "...", "image_path": "..."}, ...]
+    Returns list of successful post URLs.
+    """
+    init_db()
+    phase = get_account_phase()
+
+    if phase != "post":
+        print(f"[REDDIT] Account in '{phase}' phase — not posting yet. Running warming instead.")
+        await run_warming_session()
+        return []
+
+    browser = await launch_browser()
+    successful_urls = []
+
+    try:
+        tab = await login(browser)
+
+        # Warm up before posting — browse for a few minutes
+        print("[REDDIT] Warming up before posting...")
+        warmup_subs = random.sample(SUBREDDITS, min(2, len(SUBREDDITS)))
+        for sub in warmup_subs:
+            await browse_subreddit(tab, sub["name"], random.randint(2, 4))
+            await human_delay("between_posts")
+
+        for post in posts:
+            url = await post_image_to_subreddit(
+                tab,
+                subreddit=post["subreddit"],
+                title=post["title"],
+                image_path=post["image_path"],
+            )
+            if url:
+                successful_urls.append(url)
+
+            await human_delay("between_posts")
+
+            # Browse between posts (looks natural)
+            browse_sub = random.choice(SUBREDDITS)
+            await browse_subreddit(tab, browse_sub["name"], random.randint(2, 4))
+            await human_delay("between_posts")
+
+        print(f"[REDDIT] Session complete: {len(successful_urls)}/{len(posts)} posts successful")
+
+    finally:
+        browser.stop()
+
+    return successful_urls
+
+
+# ─── CLI ──────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    main()
+    import sys
+
+    if len(sys.argv) < 2:
+        print("Usage:")
+        print("  python reddit_module.py warm                          # Run warming session")
+        print("  python reddit_module.py phase                         # Show current account phase")
+        print("  python reddit_module.py post <sub> <title> <img>     # Post single image")
+        sys.exit(0)
+
+    cmd = sys.argv[1]
+
+    if cmd == "warm":
+        asyncio.run(run_warming_session())
+
+    elif cmd == "phase":
+        init_db()
+        print(f"Account phase: {get_account_phase()}")
+
+    elif cmd == "post":
+        if len(sys.argv) < 5:
+            print("Usage: python reddit_module.py post <subreddit> <title> <image_path>")
+            sys.exit(1)
+        sub, title, img = sys.argv[2], sys.argv[3], sys.argv[4]
+        results = asyncio.run(run_post_session([
+            {"subreddit": sub, "title": title, "image_path": img}
+        ]))
+        print(f"Posted: {results}")

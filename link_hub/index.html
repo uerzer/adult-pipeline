@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Exclusive content and direct access">
+    <meta name="robots" content="noindex, nofollow">
+    <title>Your Name - Link Hub</title>
+    
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            background-color: #0a0a0a;
+            color: #ffffff;
+            line-height: 1.6;
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 480px;
+            width: 100%;
+            text-align: center;
+        }
+        
+        /* ========== PROFILE SECTION ========== */
+        .profile-photo {
+            width: 120px;
+            height: 120px;
+            border-radius: 50%;
+            border: 4px solid #ff1493;
+            object-fit: cover;
+            margin: 0 auto 20px;
+            display: block;
+        }
+        
+        .creator-name {
+            font-size: 28px;
+            font-weight: 700;
+            margin-bottom: 12px;
+            letter-spacing: -0.5px;
+        }
+        
+        .bio {
+            font-size: 16px;
+            color: #cccccc;
+            margin-bottom: 20px;
+            line-height: 1.5;
+        }
+        
+        /* ========== SOCIAL PROOF BADGE ========== */
+        .social-proof {
+            display: inline-block;
+            background: linear-gradient(135deg, #ff1493 0%, #ff69b4 100%);
+            color: #ffffff;
+            padding: 8px 20px;
+            border-radius: 20px;
+            font-size: 14px;
+            font-weight: 600;
+            margin-bottom: 30px;
+            box-shadow: 0 4px 15px rgba(255, 20, 147, 0.3);
+        }
+        
+        /* ========== PRIMARY CTA BUTTON ========== */
+        .primary-cta {
+            display: block;
+            width: 100%;
+            background: linear-gradient(135deg, #ff1493 0%, #ff69b4 100%);
+            color: #ffffff;
+            text-decoration: none;
+            padding: 18px 30px;
+            border-radius: 12px;
+            font-size: 18px;
+            font-weight: 700;
+            margin-bottom: 25px;
+            transition: transform 0.2s, box-shadow 0.2s;
+            box-shadow: 0 6px 25px rgba(255, 20, 147, 0.4);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        
+        .primary-cta:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 30px rgba(255, 20, 147, 0.6);
+        }
+        
+        .primary-cta:active {
+            transform: translateY(0);
+        }
+        
+        /* ========== FEATURE BULLETS ========== */
+        .features {
+            background: #1a1a1a;
+            border: 1px solid #2a2a2a;
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 30px;
+            text-align: left;
+        }
+        
+        .feature-item {
+            display: flex;
+            align-items: center;
+            margin-bottom: 12px;
+            font-size: 15px;
+        }
+        
+        .feature-item:last-child {
+            margin-bottom: 0;
+        }
+        
+        .feature-item::before {
+            content: "✅";
+            margin-right: 12px;
+            font-size: 18px;
+        }
+        
+        /* ========== SECONDARY LINKS ========== */
+        .secondary-links {
+            margin-bottom: 30px;
+        }
+        
+        .secondary-link {
+            display: block;
+            width: 100%;
+            background: #1a1a1a;
+            border: 2px solid #2a2a2a;
+            color: #ffffff;
+            text-decoration: none;
+            padding: 14px 20px;
+            border-radius: 10px;
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 12px;
+            transition: border-color 0.2s, background-color 0.2s;
+        }
+        
+        .secondary-link:hover {
+            border-color: #ff1493;
+            background: #252525;
+        }
+        
+        .secondary-link:last-child {
+            margin-bottom: 0;
+        }
+        
+        /* ========== FOOTER ========== */
+        .footer {
+            font-size: 12px;
+            color: #666666;
+            margin-top: 40px;
+            padding-top: 20px;
+            border-top: 1px solid #2a2a2a;
+            line-height: 1.8;
+        }
+        
+        /* ========== MOBILE OPTIMIZATIONS ========== */
+        @media (max-width: 380px) {
+            .creator-name {
+                font-size: 24px;
+            }
+            
+            .primary-cta {
+                font-size: 16px;
+                padding: 16px 24px;
+            }
+            
+            .profile-photo {
+                width: 100px;
+                height: 100px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- ========== EDIT THIS: Profile Photo ========== -->
+        <!-- Replace "assets/photo.jpg" with your actual photo URL or relative path -->
+        <img src="assets/photo.jpg" alt="Profile Photo" class="profile-photo">
+        
+        <!-- ========== EDIT THIS: Creator Name ========== -->
+        <h1 class="creator-name">Your Name</h1>
+        
+        <!-- ========== EDIT THIS: Bio Tagline ========== -->
+        <p class="bio">Your exclusive content, daily updates 🔥</p>
+        
+        <!-- ========== EDIT THIS: Social Proof Number ========== -->
+        <div class="social-proof">Join 2,400+ subscribers</div>
+        
+        <!-- ========== EDIT THIS: Primary CTA Link ========== -->
+        <!-- Replace "#your-of-link" with your actual OnlyFans link -->
+        <a href="#your-of-link" class="primary-cta" onclick="trackClick('primary-cta')">
+            🔥 FREE TRIAL — Limited Spots
+        </a>
+        
+        <!-- ========== Feature Bullets ========== -->
+        <div class="features">
+            <!-- EDIT THIS: Customize your features/benefits -->
+            <div class="feature-item">Daily exclusive content</div>
+            <div class="feature-item">Direct DMs answered</div>
+            <div class="feature-item">Custom requests welcome</div>
+        </div>
+        
+        <!-- ========== EDIT THIS: Secondary Social Links ========== -->
+        <div class="secondary-links">
+            <!-- Replace "#reddit-link" with your actual Reddit profile URL -->
+            <a href="#reddit-link" class="secondary-link" onclick="trackClick('reddit')">
+                📱 Follow on Reddit
+            </a>
+            
+            <!-- Replace "#tiktok-link" with your actual TikTok profile URL -->
+            <a href="#tiktok-link" class="secondary-link" onclick="trackClick('tiktok')">
+                🎵 TikTok
+            </a>
+            
+            <!-- Replace "#instagram-link" with your actual Instagram profile URL -->
+            <a href="#instagram-link" class="secondary-link" onclick="trackClick('instagram')">
+                📸 Instagram
+            </a>
+        </div>
+        
+        <!-- ========== Footer ========== -->
+        <div class="footer">
+            18+ only | All content is of adults<br>
+            © 2026 | All Rights Reserved
+        </div>
+    </div>
+    
+    <!-- ========== Simple Click Tracking ========== -->
+    <script>
+        function trackClick(button) {
+            console.log('Click tracked:', button, new Date().toISOString());
+            // You can replace this with actual analytics later
+            // Example: Google Analytics, Plausible, or your own tracking
+        }
+    </script>
+</body>
+</html>

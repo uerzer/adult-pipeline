@@ -4,8 +4,8 @@
 # AI Content Generation
 google-generativeai>=0.8.0
 
-# Reddit API
-praw>=7.7.0
+# Browser automation (undetected Chrome — replaces PRAW, no API credentials needed)
+nodriver>=0.34
 
 # Image Processing
 pillow>=10.0.0
@@ -22,3 +22,10 @@ schedule>=1.2.0
 
 # Environment Variables
 python-dotenv>=1.0.0
+
+# Optional: Enhanced scheduling (uncomment if needed)
+# apscheduler>=3.10.0
+
+# Optional: Data analysis (uncomment if needed)
+# pandas>=2.0.0
+# numpy>=1.24.0

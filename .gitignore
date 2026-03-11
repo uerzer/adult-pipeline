@@ -6,3 +6,6 @@ __pycache__/
 fonts/
 *.db
 *.log
+venv/
+*.sqlite
+data/raw/
